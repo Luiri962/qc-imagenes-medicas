@@ -97,7 +97,7 @@ with col_izq:
 
     archivo = st.file_uploader(
         "Arrastra o selecciona el archivo",
-        type=["dcm", ""],
+        type=None,
         help="Formato DICOM (.dcm) — imagen del fantoma de QC",
     )
 
@@ -113,8 +113,8 @@ with col_izq:
         px_mm = float(getattr(ds, "PixelSpacing", [0.15, 0.15])[0])
 
         # Información del archivo
-        st.success("✅ Imagen cargada correctamente")
-        with st.expander("ℹ️ Metadatos DICOM", expanded=False):
+        st.success("Imagen cargada correctamente")
+        with st.expander("Metadatos DICOM", expanded=False):
             st.markdown(f"""
 | Parámetro | Valor |
 |---|---|
