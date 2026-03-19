@@ -19,7 +19,7 @@ OVERSAMPLE      = 4
 VENTANA_BORDE   = 30
 SIGMA_SUAVIZADO = 0.8
 CONTRASTE_MIN   = 150
-ANCHO_ROI       = 100
+ANCHO_ROI       = 60
 
 
 # ── Segmentación del cuadrado ────────────────────────────────────────────────
@@ -107,7 +107,7 @@ def extraer_lados(mask):
 
 
 # ── Construir ROI sobre un borde ─────────────────────────────────────────────
-def roi_sobre_borde(img, lado, tipo, ancho=ANCHO_ROI, largo_fraccion=0.6):
+def roi_sobre_borde(img, lado, tipo, ancho=ANCHO_ROI, largo_fraccion=0.4):
     cy    = lado["centro_y"]
     cx    = lado["centro_x"]
     largo = int(lado["largo"] * largo_fraccion)
