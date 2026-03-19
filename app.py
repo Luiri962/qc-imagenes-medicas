@@ -7,6 +7,13 @@ import pydicom
 import numpy as np
 import io
 
+# ── Función auxiliar de normalización ────────────────────────────────────────
+def _normalizar(img, p_low=1, p_high=99):
+    """Normaliza la imagen entre 0 y 1 usando percentiles."""
+    v_min = np.percentile(img, p_low)
+    v_max = np.percentile(img, p_high)
+    return np.clip((img - v_min) / (v_max - v_min + 1e-10), 0, 1)
+
 # ── Configuración de la página ────────────────────────────────────────────────
 st.set_page_config(
     page_title="QC — Imágenes Médicas",
@@ -151,12 +158,7 @@ with col_izq:
         )
 
 
-# ── Función auxiliar de normalización ────────────────────────────────────────
-def _normalizar(img, p_low=1, p_high=99):
-    """Normaliza la imagen entre 0 y 1 usando percentiles."""
-    v_min = np.percentile(img, p_low)
-    v_max = np.percentile(img, p_high)
-    return np.clip((img - v_min) / (v_max - v_min + 1e-10), 0, 1)
+
 
 
 # ── Panel de resultados ───────────────────────────────────────────────────────
