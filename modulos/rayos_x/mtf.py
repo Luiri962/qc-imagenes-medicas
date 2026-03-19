@@ -19,7 +19,7 @@ OVERSAMPLE      = 4
 VENTANA_BORDE   = 30
 SIGMA_SUAVIZADO = 0.8
 CONTRASTE_MIN   = 150
-ANCHO_ROI       = 60
+ANCHO_ROI       = 50
 
 
 # ── Segmentación del cuadrado ────────────────────────────────────────────────
