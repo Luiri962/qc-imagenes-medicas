@@ -107,7 +107,7 @@ def extraer_lados(mask):
 
 
 # ── Construir ROI sobre un borde ─────────────────────────────────────────────
-def roi_sobre_borde(img, lado, tipo, ancho=ANCHO_ROI, largo_fraccion=0.4):
+def roi_sobre_borde(img, lado, tipo, ancho=ANCHO_ROI, largo_fraccion=0.2):
     cy    = lado["centro_y"]
     cx    = lado["centro_x"]
     largo = int(lado["largo"] * largo_fraccion)
