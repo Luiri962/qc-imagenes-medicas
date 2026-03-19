@@ -139,7 +139,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         p = pf(k)
         if p.max() - p.min() < CONTRASTE_MIN:
             continue
-        grad = gaussian_filter(np.abs(np.diff(p)), sigma=0.5)
+        grad = gaussian_filter(np.abs(np.diff(p)), sigma=0.8)
         imax = np.argmax(grad)
         if grad[imax] < 30:
             continue
