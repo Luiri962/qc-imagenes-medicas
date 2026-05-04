@@ -198,14 +198,28 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
             c1 = min(W, cx - margen)
 
     return r0, r1, c0, c1
-
-# ── Calcular MTF ─────────────────────────────
+    # ── 1. MTF ─────────────────────────
 def calcular_mtf(roi, px_mm, orientacion="H"):
     from scipy.optimize import curve_fit
     from scipy.special import erf as sci_erf
 
     nyquist = 1 / (2 * px_mm)
 
+    # ── 1. Promedio directo — exactamente como ImageJ ─────────────────────────
+    # ImageJ simplemente promedia todas las filas (o columnas) del ROI
+    if orientacion == "H":
+        perfil = roi.mean(axis=1).astype(float)   # promedio por fila
+    else:
+        perfil = roi.mean(axis=0).astype(float)   # promedio por columna
+
+    # Normalizar 0-1
+    p_min = perfil.min()
+    p_max = perfil.max()
+    perfil_n = (perfil - p_min) / (p_max - p_min + 1e-10)
+    x_px = np.arange(len(perfil_n), dtype=float)
+    x_mm = x_px * px_mm
+
+    # ── 2. Ángulo del borde ───────────────────────────────────────────────────
     if orientacion == "H":
         n  = roi.shape[1]
         pf = lambda k: roi[:, k].astype(float)
@@ -213,116 +227,89 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         n  = roi.shape[0]
         pf = lambda k: roi[k, :].astype(float)
 
-    # ── 1. Posición sub-pixel del borde en cada perfil ────────────────────────
-    posiciones, idx_ok = [], []
+    posiciones = []
     for k in range(n):
         p = pf(k)
-        if p.max() - p.min() < CONTRASTE_MIN:
-            continue
-        grad = gaussian_filter(np.abs(np.diff(p)), sigma=0.8)
+        if p.max() - p.min() < CONTRASTE_MIN: continue
+        grad = gaussian_filter(np.abs(np.diff(p)), sigma=0.5)
         imax = np.argmax(grad)
-        if grad[imax] < 30:
-            continue
-        s = slice(max(0, imax-4), min(len(grad), imax+5))
-        g = grad[s]; xg = np.arange(s.start, s.stop, dtype=float)
-        posiciones.append(np.sum(xg*g) / (np.sum(g)+1e-10))
-        idx_ok.append(k)
+        if grad[imax] < 30: continue
+        s = slice(max(0,imax-3), min(len(grad),imax+4))
+        g = grad[s]; xg = np.arange(s.start,s.stop,dtype=float)
+        posiciones.append(np.sum(xg*g)/(np.sum(g)+1e-10))
 
-    if len(posiciones) < 5:
-        raise ValueError(
-            f"Solo {len(posiciones)} perfiles válidos. "
-            "Intenta bajar CONTRASTE_MIN."
-        )
+    angulo = 0.0
+    if len(posiciones) >= 5:
+        pos = np.array(posiciones)
+        pos = pos[np.abs(pos-np.median(pos))<8]
+        if len(pos) >= 3:
+            angulo = np.degrees(
+                np.arctan(np.polyfit(np.arange(len(pos)), pos, 1)[0]))
 
-    posiciones = np.array(posiciones)
-    ok         = np.abs(posiciones - np.median(posiciones)) < 8
-    posiciones = posiciones[ok]
-    idx_ok     = np.array(idx_ok)[ok]
+    # ── 3. Recortar ±32 px alrededor del borde (igual que ImageJ sample=32) ──
+    centro_borde = int(np.argmax(np.abs(np.diff(perfil_n))))
+    v = 32
+    i0 = max(0, centro_borde - v)
+    i1 = min(len(perfil_n), centro_borde + v)
+    esf_crop  = perfil_n[i0:i1]
+    x_crop    = x_mm[i0:i1]
 
-    angulo = np.degrees(
-        np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
-    )
-
-    # ── 2. ESF alineada — centrar cada perfil en su posición de borde ─────────
-    longitud = roi.shape[0] if orientacion == "H" else roi.shape[1]
-    esf_sum  = np.zeros(longitud)
-    cuenta   = np.zeros(longitud)
-    centro   = longitud // 2
-
-    for i, k in enumerate(idx_ok):
-        p    = pf(k).astype(float)
-        pos  = posiciones[i]
-        v_lo = np.percentile(p, 10)
-        v_hi = np.percentile(p, 90)
-        pn   = np.clip((p - v_lo) / (v_hi - v_lo + 1e-10), 0, 1)
-        desplazamiento = int(round(centro - pos))
-        p_shifted = np.roll(pn, desplazamiento)
-        esf_sum += p_shifted
-        cuenta  += 1
-
-    esf  = esf_sum / (cuenta + 1e-10)
-    x_px = np.arange(len(esf), dtype=float) - centro
-    x_mm = x_px * px_mm
-
-    # ── 3. Recortar ESF ±32 px alrededor del borde y ajustar erf ─────────────
-    centro_borde = np.argmax(np.abs(np.diff(esf)))
-    ventana      = 32
-    idx0 = max(0, centro_borde - ventana)
-    idx1 = min(len(esf), centro_borde + ventana)
-    esf_crop  = esf[idx0:idx1]
-    x_mm_crop = x_mm[idx0:idx1]
-
+    # ── 4. Ajuste erf ─────────────────────────────────────────────────────────
     def esf_func(x, a, b, c, sigma):
         return a + b * sci_erf((x - c) / (np.sqrt(2) * abs(sigma)))
 
     try:
-        pos_borde_mm = x_mm[centro_borde]
+        c0 = x_mm[centro_borde]
         popt, _ = curve_fit(
-            esf_func, x_mm_crop, esf_crop,
-            p0=[0.0, 0.5, pos_borde_mm, px_mm * 2],
-            bounds=([-0.1,  0.1, x_mm_crop.min(), px_mm * 0.1],
-                    [ 0.5,  1.0, x_mm_crop.max(), px_mm * 20]),
-            maxfev=10000
+            esf_func, x_crop, esf_crop,
+            p0   = [esf_crop.min(), esf_crop.max()-esf_crop.min(), c0, px_mm],
+            bounds = ([-0.2,  0.3, x_crop.min(), px_mm*0.1],
+                      [ 0.3,  1.2, x_crop.max(), px_mm*15]),
+            maxfev = 10000
         )
         sigma_mm = abs(popt[3])
         fwhm_mm  = 2.355 * sigma_mm
-        freqs    = np.linspace(0, nyquist * 1.05, 2000)
-        mtf      = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
-        lsf      = np.exp(-x_mm**2 / (2 * sigma_mm**2))
-        lsf     /= lsf.max()
-        print(f"  Ajuste erf OK | sigma={sigma_mm:.4f} mm | "
-              f"FWHM={fwhm_mm:.4f} mm | MTF50={0.4413/fwhm_mm:.3f} lp/mm")
+
+        # MTF analítica — idéntica a ImageJ
+        freqs = np.linspace(0, nyquist * 1.05, 2000)
+        mtf   = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
+
+        # LSF para graficar
+        x_lsf = x_mm - popt[2]
+        lsf   = np.exp(-x_lsf**2 / (2 * sigma_mm**2))
+        lsf  /= lsf.max()
+
+        print(f"  sigma={sigma_mm:.4f} mm | FWHM={fwhm_mm:.3f} mm | "
+              f"MTF50={0.4413/fwhm_mm:.3f} lp/mm")
 
     except Exception as e:
-        print(f"  Ajuste erf falló: {e} — usando derivada numérica")
-        esf_s = gaussian_filter(esf.astype(float), sigma=1.5)
+        print(f"  Ajuste erf falló ({e}) — derivada numérica")
+        esf_s = gaussian_filter(perfil_n, sigma=1.0)
         lsf   = np.diff(esf_s)
         if abs(lsf.min()) > abs(lsf.max()): lsf = -lsf
-        lsf  -= lsf.min(); lsf /= (lsf.max() + 1e-10)
-        N     = len(lsf); pad = 16
-        mtf_r = np.abs(fft(lsf * np.hanning(N), n=N*pad))[:N*pad//2]
+        lsf  -= lsf.min(); lsf /= (lsf.max()+1e-10)
+        N = len(lsf); pad = 16
+        mtf_r = np.abs(fft(lsf*np.hanning(N), n=N*pad))[:N*pad//2]
         mtf_r /= mtf_r[0]
-        freqs_r = fftfreq(N*pad, d=px_mm)[:N*pad//2]
-        m       = (freqs_r >= 0) & (freqs_r <= nyquist * 1.05)
-        freqs   = freqs_r[m]; mtf = mtf_r[m]
+        fr = fftfreq(N*pad, d=px_mm)[:N*pad//2]
+        m  = (fr >= 0) & (fr <= nyquist*1.05)
+        freqs = fr[m]; mtf = mtf_r[m]
         fwhm_mm = None
 
-    # ── 4. MTF50 y MTF20 ──────────────────────────────────────────────────────
+    # ── 5. MTF50 y MTF20 ──────────────────────────────────────────────────────
     def fu(f, m, u):
         idx = np.where(m <= u)[0]
         if not len(idx): return None
         i = idx[0]
-        return float(
-            f[i-1] + (f[i]-f[i-1]) * (u-m[i-1]) / (m[i]-m[i-1])
-        ) if i > 0 else float(f[0])
+        return float(f[i-1]+(f[i]-f[i-1])*(u-m[i-1])/(m[i]-m[i-1])) if i>0 else float(f[0])
 
     return {
-        "freqs":   freqs,  "mtf":     mtf,
+        "freqs":   freqs,       "mtf":     mtf,
         "mtf50":   fu(freqs, mtf, 0.50),
         "mtf20":   fu(freqs, mtf, 0.20),
-        "angulo":  angulo, "fwhm_mm": fwhm_mm,
-        "esf_x":   x_mm,  "esf":     esf,
-        "lsf":     lsf,   "bin_mm":  px_mm,
+        "angulo":  angulo,      "fwhm_mm": fwhm_mm,
+        "esf_x":   x_mm,       "esf":     perfil_n,
+        "lsf":     lsf,        "bin_mm":  px_mm,
         "nyquist": nyquist,
     }
 
