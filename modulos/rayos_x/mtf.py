@@ -171,9 +171,9 @@ def extraer_lados(mask):
 
 # ── Construir ROI hacia el interior del cuadrado ─────────────────────────────
 def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
-    profundo = int(lado["largo"] * 0.15)
+    profundo = int(lado["largo"] * 0.25)
     margen   = int(-4.0 / px_mm)
-    ancho    = int(10.0 / px_mm)
+    ancho    = int(12.0 / px_mm)
     cy       = lado["centro_y"]
     cx       = lado["centro_x"]
     H, W     = img.shape
