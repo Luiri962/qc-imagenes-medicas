@@ -212,26 +212,13 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
     return r0, r1, c0, c1
 
 
-def calcular_mtf(roi, px_mm, orientacion="H"):
+pythondef calcular_mtf(roi, px_mm, orientacion="H"):
     from scipy.optimize import curve_fit
     from scipy.special import erf as sci_erf
 
     nyquist = 1 / (2 * px_mm)
 
-    # ── 1. ESF = promedio directo (igual que ImageJ) ──────────────────────────
-    if orientacion == "H":
-        esf_raw = roi.mean(axis=1).astype(float)  # promedio por fila
-    else:
-        esf_raw = roi.mean(axis=0).astype(float)  # promedio por columna
-
-    # Normalizar 0-1
-    v_min = esf_raw.min()
-    v_max = esf_raw.max()
-    esf   = (esf_raw - v_min) / (v_max - v_min + 1e-10)
-    x_px  = np.arange(len(esf), dtype=float)
-    x_mm  = x_px * px_mm
-
-    # ── 2. Detectar ángulo del borde ──────────────────────────────────────────
+    # ── 1. Posición sub-pixel del borde en cada perfil ────────────────────────
     if orientacion == "H":
         n  = roi.shape[1]
         pf = lambda k: roi[:, k].astype(float)
@@ -239,55 +226,83 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         n  = roi.shape[0]
         pf = lambda k: roi[k, :].astype(float)
 
-    posiciones = []
+    posiciones, idx_ok = [], []
     for k in range(n):
         p = pf(k)
-        if p.max() - p.min() < CONTRASTE_MIN: continue
+        if p.max() - p.min() < CONTRASTE_MIN:
+            continue
         grad = gaussian_filter(np.abs(np.diff(p)), sigma=0.8)
         imax = np.argmax(grad)
-        if grad[imax] < 30: continue
-        s = slice(max(0,imax-4), min(len(grad),imax+5))
+        if grad[imax] < 30:
+            continue
+        s = slice(max(0, imax-4), min(len(grad), imax+5))
         g = grad[s]; xg = np.arange(s.start, s.stop, dtype=float)
-        posiciones.append(np.sum(xg*g)/(np.sum(g)+1e-10))
+        posiciones.append(np.sum(xg*g) / (np.sum(g)+1e-10))
+        idx_ok.append(k)
 
-    angulo = 0.0
-    if len(posiciones) >= 5:
-        posiciones = np.array(posiciones)
-        ok = np.abs(posiciones - np.median(posiciones)) < 8
-        posiciones = posiciones[ok]
-        angulo = np.degrees(
-            np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
+    if len(posiciones) < 5:
+        raise ValueError(
+            f"Solo {len(posiciones)} perfiles válidos. "
+            "Intenta bajar CONTRASTE_MIN."
         )
 
-    # ── 3. Ajustar erf a la ESF (igual que ImageJ) ───────────────────────────
+    posiciones = np.array(posiciones)
+    ok         = np.abs(posiciones - np.median(posiciones)) < 8
+    posiciones = posiciones[ok]
+    idx_ok     = np.array(idx_ok)[ok]
+
+    angulo = np.degrees(
+        np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
+    )
+
+    # ── 2. ESF alineada — centrar cada perfil en su posición de borde ─────────
+    longitud = roi.shape[0] if orientacion == "H" else roi.shape[1]
+    esf_sum  = np.zeros(longitud)
+    cuenta   = np.zeros(longitud)
+    centro   = longitud // 2
+
+    for i, k in enumerate(idx_ok):
+        p    = pf(k).astype(float)
+        pos  = posiciones[i]
+        v_lo = np.percentile(p, 10)
+        v_hi = np.percentile(p, 90)
+        pn   = np.clip((p - v_lo) / (v_hi - v_lo + 1e-10), 0, 1)
+        desplazamiento = int(round(centro - pos))
+        p_shifted = np.roll(pn, desplazamiento)
+        esf_sum += p_shifted
+        cuenta  += 1
+
+    esf  = esf_sum / (cuenta + 1e-10)
+    x_px = np.arange(len(esf), dtype=float) - centro
+    x_mm = x_px * px_mm
+
+    # ── 3. Ajustar función erf a la ESF ───────────────────────────────────────
     def esf_func(x, a, b, c, sigma):
         return a + b * sci_erf((x - c) / (np.sqrt(2) * abs(sigma)))
-
-    pos_borde = float(x_mm[np.argmax(np.abs(np.diff(esf)))])
 
     try:
         popt, _ = curve_fit(
             esf_func, x_mm, esf,
-            p0=[0.0, 0.5, pos_borde, px_mm * 2],
-            bounds=([-0.1, 0.1, x_mm.min(), px_mm*0.1],
-                    [ 0.5, 1.0, x_mm.max(), px_mm*20]),
+            p0=[0.0, 0.5, 0.0, px_mm * 2],
+            bounds=([-0.1,  0.1, x_mm.min(), px_mm * 0.1],
+                    [ 0.5,  1.0, x_mm.max(), px_mm * 20]),
             maxfev=10000
         )
-        sigma_mm = abs(popt[3])   # sigma en mm
+        sigma_mm = abs(popt[3])
         esf_fit  = esf_func(x_mm, *popt)
         fwhm_mm  = 2.355 * sigma_mm
 
-        # ── 4. MTF analítica desde sigma (Gaussiana) ─────────────────────────
-        # MTF(f) = exp(-2π²σ²f²) — idéntico a lo que calcula ImageJ
-        freqs  = np.linspace(0, nyquist * 1.05, 2000)
-        mtf    = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
+        # ── 4. MTF analítica (idéntica a ImageJ) ─────────────────────────────
+        # MTF(f) = exp(-2π²σ²f²)
+        freqs = np.linspace(0, nyquist * 1.05, 2000)
+        mtf   = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
 
-        # LSF para graficar (Gaussiana centrada)
-        x_lsf = x_mm - popt[2]
-        lsf   = np.exp(-x_lsf**2 / (2 * sigma_mm**2))
-        lsf  /= lsf.max()
+        # LSF para graficar
+        lsf = np.exp(-x_mm**2 / (2 * sigma_mm**2))
+        lsf /= lsf.max()
 
-        print(f"  Ajuste erf OK | sigma={sigma_mm:.4f} mm | FWHM={fwhm_mm:.4f} mm")
+        print(f"  Ajuste erf OK | sigma={sigma_mm:.4f} mm | "
+              f"FWHM={fwhm_mm:.4f} mm | MTF50={0.4413/fwhm_mm:.3f} lp/mm")
 
     except Exception as e:
         print(f"  Ajuste erf falló: {e} — usando derivada numérica")
@@ -299,25 +314,28 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         N     = len(lsf); pad = 16
         mtf_r = np.abs(fft(lsf * np.hanning(N), n=N*pad))[:N*pad//2]
         mtf_r /= mtf_r[0]
-        freqs = fftfreq(N*pad, d=px_mm)[:N*pad//2]
-        m     = (freqs >= 0) & (freqs <= nyquist * 1.05)
-        freqs = freqs[m]; mtf = mtf_r[m]
+        freqs_r = fftfreq(N*pad, d=px_mm)[:N*pad//2]
+        m       = (freqs_r >= 0) & (freqs_r <= nyquist * 1.05)
+        freqs   = freqs_r[m]
+        mtf     = mtf_r[m]
         fwhm_mm = None
 
-    # ── 5. MTF50 y MTF20 ─────────────────────────────────────────────────────
+    # ── 5. MTF50 y MTF20 ──────────────────────────────────────────────────────
     def fu(f, m, u):
         idx = np.where(m <= u)[0]
         if not len(idx): return None
         i = idx[0]
-        return float(f[i-1]+(f[i]-f[i-1])*(u-m[i-1])/(m[i]-m[i-1])) if i>0 else float(f[0])
+        return float(
+            f[i-1] + (f[i]-f[i-1]) * (u-m[i-1]) / (m[i]-m[i-1])
+        ) if i > 0 else float(f[0])
 
     return {
-        "freqs":   freqs, "mtf":     mtf,
+        "freqs":   freqs,  "mtf":     mtf,
         "mtf50":   fu(freqs, mtf, 0.50),
         "mtf20":   fu(freqs, mtf, 0.20),
-        "angulo":  angulo,  "fwhm_mm": fwhm_mm,
-        "esf_x":   x_mm,   "esf":     esf,
-        "lsf":     lsf,    "bin_mm":  px_mm,
+        "angulo":  angulo, "fwhm_mm": fwhm_mm,
+        "esf_x":   x_mm,  "esf":     esf,
+        "lsf":     lsf,   "bin_mm":  px_mm,
         "nyquist": nyquist,
     }
 
