@@ -19,8 +19,8 @@ OVERSAMPLE      = 4
 VENTANA_BORDE   = 30
 SIGMA_SUAVIZADO = 0.8
 CONTRASTE_MIN   = 80
-ANCHO_MM        = 5.0   # mm hacia adentro del borde
-LARGO_FRACCION  = 0.4   # fracción del largo del borde a usar
+ANCHO_MM        = 7.0   # mm hacia adentro del borde
+LARGO_FRACCION  = 0.15   # fracción del largo del borde a usar
 
 
 # ── Segmentación del cuadrado ────────────────────────────────────────────────
