@@ -212,7 +212,6 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
     return r0, r1, c0, c1
 
 
-# ── Cálculo MTF ──────────────────────────────────────────────────────────────
 def calcular_mtf(roi, px_mm, orientacion="H"):
     from scipy.optimize import curve_fit
     from scipy.special import erf as sci_erf
@@ -321,7 +320,9 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         "lsf":     lsf,    "bin_mm":  px_mm,
         "nyquist": nyquist,
     }
-    # ── Figura completa ──────────────────────────────────────────────────────────
+
+
+# ── Figura completa ──────────────────────────────────────────────────────────
 def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
     ys_m, xs_m = np.where(mask)
     mg  = 150
@@ -496,4 +497,5 @@ def run(img, ds):
         "equipo":   equipo,
         "fecha":    fecha,
     }
+
 
