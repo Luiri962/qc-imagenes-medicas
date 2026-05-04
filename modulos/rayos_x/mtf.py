@@ -205,66 +205,108 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
 
     nyquist = 1 / (2 * px_mm)
 
-    # ── 1. Promedio directo — exactamente como ImageJ ─────────────────────────
-    # ImageJ simplemente promedia todas las filas (o columnas) del ROI
     if orientacion == "H":
-        perfil = roi.mean(axis=1).astype(float)   # promedio por fila
+        n_perfiles = roi.shape[1]
+        perfil     = lambda k: roi[:, k].astype(float)
+        n_muestras = roi.shape[0]
     else:
-        perfil = roi.mean(axis=0).astype(float)   # promedio por columna
+        n_perfiles = roi.shape[0]
+        perfil     = lambda k: roi[k, :].astype(float)
+        n_muestras = roi.shape[1]
 
-    # Normalizar 0-1
-    p_min = perfil.min()
-    p_max = perfil.max()
-    perfil_n = (perfil - p_min) / (p_max - p_min + 1e-10)
-    x_px = np.arange(len(perfil_n), dtype=float)
-    x_mm = x_px * px_mm
-
-    # ── 2. Ángulo del borde ───────────────────────────────────────────────────
-    if orientacion == "H":
-        n  = roi.shape[1]
-        pf = lambda k: roi[:, k].astype(float)
-    else:
-        n  = roi.shape[0]
-        pf = lambda k: roi[k, :].astype(float)
-
-    posiciones = []
-    for k in range(n):
-        p = pf(k)
-        if p.max() - p.min() < CONTRASTE_MIN: continue
+    # ── 1. Posición sub-pixel del borde en cada perfil ────────────────────────
+    posiciones, idx_ok = [], []
+    for k in range(n_perfiles):
+        p = perfil(k)
+        if p.max() - p.min() < CONTRASTE_MIN:
+            continue
         grad = gaussian_filter(np.abs(np.diff(p)), sigma=0.5)
         imax = np.argmax(grad)
-        if grad[imax] < 30: continue
-        s = slice(max(0,imax-3), min(len(grad),imax+4))
-        g = grad[s]; xg = np.arange(s.start,s.stop,dtype=float)
-        posiciones.append(np.sum(xg*g)/(np.sum(g)+1e-10))
+        if grad[imax] < 30:
+            continue
+        s  = slice(max(0, imax-3), min(len(grad), imax+4))
+        g  = grad[s]
+        xg = np.arange(s.start, s.stop, dtype=float)
+        posiciones.append(np.sum(xg*g) / (np.sum(g) + 1e-10))
+        idx_ok.append(k)
 
-    angulo = 0.0
-    if len(posiciones) >= 5:
-        pos = np.array(posiciones)
-        pos = pos[np.abs(pos-np.median(pos))<8]
-        if len(pos) >= 3:
-            angulo = np.degrees(
-                np.arctan(np.polyfit(np.arange(len(pos)), pos, 1)[0]))
+    if len(posiciones) < 5:
+        raise ValueError(f"Solo {len(posiciones)} perfiles válidos.")
 
-    # ── 3. Recortar ±32 px alrededor del borde (igual que ImageJ sample=32) ──
-    centro_borde = int(np.argmax(np.abs(np.diff(perfil_n))))
-    v = 32
-    i0 = max(0, centro_borde - v)
-    i1 = min(len(perfil_n), centro_borde + v)
-    esf_crop  = perfil_n[i0:i1]
-    x_crop    = x_mm[i0:i1]
+    posiciones = np.array(posiciones)
+    ok         = np.abs(posiciones - np.median(posiciones)) < 8
+    posiciones = posiciones[ok]
+    idx_ok     = np.array(idx_ok)[ok]
 
-    # ── 4. Ajuste erf ─────────────────────────────────────────────────────────
+    angulo = np.degrees(
+        np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
+    )
+
+    # ── 2. ESF por superposición con oversampling x4 ─────────────────────────
+    # Cada muestra se coloca en su posición relativa al borde
+    # Esto es lo que hace ImageJ internamente
+    oversample = 4
+    offsets, valores = [], []
+
+    for i, k in enumerate(idx_ok):
+        p    = perfil(k).astype(float)
+        pos  = posiciones[i]
+        v_lo = np.percentile(p, 5)
+        v_hi = np.percentile(p, 95)
+        pn   = np.clip((p - v_lo) / (v_hi - v_lo + 1e-10), 0, 1)
+        for j, v in enumerate(pn):
+            offsets.append((j - pos) * oversample)
+            valores.append(v)
+
+    offsets = np.array(offsets)
+    valores = np.array(valores)
+    orden   = np.argsort(offsets)
+    offsets = offsets[orden]
+    valores = valores[orden]
+
+    # ── 3. Binning — 1 bin por unidad de oversampling ─────────────────────────
+    o_min = np.floor(offsets.min())
+    o_max = np.ceil(offsets.max())
+    bins  = np.arange(o_min, o_max + 1)
+    esf   = np.zeros(len(bins))
+    cnt   = np.zeros(len(bins))
+
+    for off, val in zip(offsets, valores):
+        idx = int(np.round(off - o_min))
+        if 0 <= idx < len(esf):
+            esf[idx] += val
+            cnt[idx] += 1
+
+    mask_b    = cnt > 0
+    esf[mask_b] /= cnt[mask_b]
+    x_os      = bins                          # posición en unidades os
+    x_mm_esf  = x_os / oversample * px_mm    # posición en mm
+
+    # Interpolar bins vacíos
+    if not mask_b.all():
+        esf = np.interp(x_os, x_os[mask_b], esf[mask_b])
+
+    # ── 4. Recortar ±32 bins alrededor del borde ──────────────────────────────
+    centro_esf = int(np.argmax(np.abs(np.diff(esf))))
+    v          = 32 * oversample   # ±32 px reales = ±128 bins os
+    i0 = max(0, centro_esf - v)
+    i1 = min(len(esf), centro_esf + v)
+    esf_crop   = esf[i0:i1]
+    x_crop     = x_mm_esf[i0:i1]
+
+    # ── 5. Ajuste erf ─────────────────────────────────────────────────────────
     def esf_func(x, a, b, c, sigma):
         return a + b * sci_erf((x - c) / (np.sqrt(2) * abs(sigma)))
 
     try:
-        c0 = x_mm[centro_borde]
+        c0 = x_mm_esf[centro_esf]
         popt, _ = curve_fit(
             esf_func, x_crop, esf_crop,
-            p0   = [esf_crop.min(), esf_crop.max()-esf_crop.min(), c0, px_mm],
-            bounds = ([-0.2,  0.3, x_crop.min(), px_mm*0.1],
-                      [ 0.3,  1.2, x_crop.max(), px_mm*15]),
+            p0     = [esf_crop.min(),
+                      esf_crop.max() - esf_crop.min(),
+                      c0, px_mm],
+            bounds = ([-0.2,  0.2, x_crop.min(), px_mm * 0.1],
+                      [ 0.3,  1.2, x_crop.max(), px_mm * 15]),
             maxfev = 10000
         )
         sigma_mm = abs(popt[3])
@@ -275,45 +317,45 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         mtf   = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
 
         # LSF para graficar
-        x_lsf = x_mm - popt[2]
+        x_lsf = x_mm_esf - popt[2]
         lsf   = np.exp(-x_lsf**2 / (2 * sigma_mm**2))
         lsf  /= lsf.max()
 
-        print(f"  sigma={sigma_mm:.4f} mm | FWHM={fwhm_mm:.3f} mm | "
-              f"MTF50={0.4413/fwhm_mm:.3f} lp/mm")
+        print(f"  ✅ sigma={sigma_mm:.4f}mm | FWHM={fwhm_mm:.3f}mm | "
+              f"MTF50={0.4413/fwhm_mm:.3f} lp/mm | ángulo={angulo:.2f}°")
 
     except Exception as e:
-        print(f"  Ajuste erf falló ({e}) — derivada numérica")
-        esf_s = gaussian_filter(perfil_n, sigma=1.0)
+        print(f"  ⚠️  Ajuste erf falló: {e}")
+        esf_s = gaussian_filter(esf.astype(float), sigma=1.0)
         lsf   = np.diff(esf_s)
         if abs(lsf.min()) > abs(lsf.max()): lsf = -lsf
-        lsf  -= lsf.min(); lsf /= (lsf.max()+1e-10)
-        N = len(lsf); pad = 16
-        mtf_r = np.abs(fft(lsf*np.hanning(N), n=N*pad))[:N*pad//2]
+        lsf  -= lsf.min(); lsf /= (lsf.max() + 1e-10)
+        N     = len(lsf); pad = 16
+        mtf_r = np.abs(fft(lsf * np.hanning(N), n=N*pad))[:N*pad//2]
         mtf_r /= mtf_r[0]
-        fr = fftfreq(N*pad, d=px_mm)[:N*pad//2]
-        m  = (fr >= 0) & (fr <= nyquist*1.05)
+        fr    = fftfreq(N*pad, d=px_mm/oversample)[:N*pad//2]
+        m     = (fr >= 0) & (fr <= nyquist * 1.05)
         freqs = fr[m]; mtf = mtf_r[m]
         fwhm_mm = None
 
-    # ── 5. MTF50 y MTF20 ──────────────────────────────────────────────────────
+    # ── 6. MTF50 y MTF20 ──────────────────────────────────────────────────────
     def fu(f, m, u):
         idx = np.where(m <= u)[0]
         if not len(idx): return None
         i = idx[0]
-        return float(f[i-1]+(f[i]-f[i-1])*(u-m[i-1])/(m[i]-m[i-1])) if i>0 else float(f[0])
+        return float(
+            f[i-1] + (f[i]-f[i-1]) * (u-m[i-1]) / (m[i]-m[i-1])
+        ) if i > 0 else float(f[0])
 
     return {
-        "freqs":   freqs,       "mtf":     mtf,
+        "freqs":   freqs,      "mtf":     mtf,
         "mtf50":   fu(freqs, mtf, 0.50),
         "mtf20":   fu(freqs, mtf, 0.20),
-        "angulo":  angulo,      "fwhm_mm": fwhm_mm,
-        "esf_x":   x_mm,       "esf":     perfil_n,
-        "lsf":     lsf,        "bin_mm":  px_mm,
+        "angulo":  angulo,     "fwhm_mm": fwhm_mm,
+        "esf_x":   x_mm_esf,  "esf":     esf,
+        "lsf":     lsf,       "bin_mm":  px_mm / oversample,
         "nyquist": nyquist,
     }
-
-
 # ── Figura completa ──────────────────────────────────────────────────────────
 def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
     ys_m, xs_m = np.where(mask)
