@@ -473,9 +473,12 @@ def run(img, ds):
     lado_H = max(cands_H.values(), key=lambda x: x["largo"])
     lado_V = max(cands_V.values(), key=lambda x: x["largo"])
 
-    r0H, r1H, c0H, c1H = roi_sobre_borde(img, lado_H, "H")
-    r0V, r1V, c0V, c1V = roi_sobre_borde(img, lado_V, "V")
+    r0H, r1H, c0H, c1H = roi_sobre_borde(
+    img, lado_H, "H", nombre_H, cy_cuad, cx_cuad, px_mm=px_mm)
+    r0V, r1V, c0V, c1V = roi_sobre_borde(
+    img, lado_V, "V", nombre_V, cy_cuad, cx_cuad, px_mm=px_mm)
     rois = {"H": (r0H, r1H, c0H, c1H), "V": (r0V, r1V, c0V, c1V)}
+    
 
     res_H = calcular_mtf(img[r0H:r1H, c0H:c1H], px_mm, "H")
     res_V = calcular_mtf(img[r0V:r1V, c0V:c1V], px_mm, "V")
