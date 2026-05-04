@@ -175,40 +175,34 @@ def extraer_lados(mask):
 
 # ── Construir ROI hacia el interior del cuadrado ─────────────────────────────
 def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad,
-                    px_mm=0.15, ancho_mm=ANCHO_MM, largo_fraccion=LARGO_FRACCION):
-    """
-    El ROI queda DENTRO del cuadrado, pegado al borde por adentro.
-    ancho_mm : cuántos mm hacia el interior del cuadrado
-    """
-    ancho = int(ancho_mm / px_mm)   # mm → px
-    cy    = lado["centro_y"]
-    cx    = lado["centro_x"]
-    largo = int(lado["largo"] * largo_fraccion)
-    H, W  = img.shape
+                    px_mm=0.15, ancho_mm=5.0, largo_fraccion=0.4):
+    ancho   = int(ancho_mm / px_mm)
+    margen  = int(3 / px_mm)   # 3 mm extra para asegurar que queda dentro
+    cy      = lado["centro_y"]
+    cx      = lado["centro_x"]
+    largo   = int(lado["largo"] * largo_fraccion)
+    H, W    = img.shape
 
     if tipo == "H":
-        # Decidir si el interior está arriba o abajo
         if nombre_lado == "top":
-            # Borde superior → interior hacia ABAJO
-            r0 = max(0, cy)
-            r1 = min(H, cy + ancho)
-        else:
-            # Borde inferior → interior hacia ARRIBA
-            r0 = max(0, cy - ancho)
-            r1 = min(H, cy)
+            # Interior está ABAJO — empezar desde el borde + margen
+            r0 = max(0, cy + margen)
+            r1 = min(H, cy + margen + ancho)
+        else:  # bottom
+            # Interior está ARRIBA — terminar en el borde - margen
+            r0 = max(0, cy - margen - ancho)
+            r1 = min(H, cy - margen)
         c0 = max(0, cx - largo // 2)
         c1 = min(W, cx + largo // 2)
-
     else:
-        # Decidir si el interior está a la izquierda o derecha
         if nombre_lado == "left":
-            # Borde izquierdo → interior hacia la DERECHA
-            c0 = max(0, cx)
-            c1 = min(W, cx + ancho)
-        else:
-            # Borde derecho → interior hacia la IZQUIERDA
-            c0 = max(0, cx - ancho)
-            c1 = min(W, cx)
+            # Interior está a la DERECHA — empezar desde el borde + margen
+            c0 = max(0, cx + margen)
+            c1 = min(W, cx + margen + ancho)
+        else:  # right
+            # Interior está a la IZQUIERDA — terminar en borde - margen
+            c0 = max(0, cx - margen - ancho)
+            c1 = min(W, cx - margen)
         r0 = max(0, cy - largo // 2)
         r1 = min(H, cy + largo // 2)
 
