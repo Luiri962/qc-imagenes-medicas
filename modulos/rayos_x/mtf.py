@@ -173,35 +173,33 @@ def extraer_lados(mask):
     return lados
 
 
-# ── Construir ROI hacia el interior del cuadrado ─────────────────────────────
 def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad,
-                    px_mm=0.15, ancho_mm=5.0, largo_fraccion=0.4):
-    ancho   = int(ancho_mm / px_mm)
-    margen  = int(3 / px_mm)   # 3 mm extra para asegurar que queda dentro
+                    px_mm=0.15, ancho_mm=ANCHO_MM, largo_fraccion=LARGO_FRACCION):
+
+    delgado = int(2.0 / px_mm)      # ← grosor del ROI (perpendicular al borde)
+    margen  = int(2.0 / px_mm)      # ← separación desde el borde hacia adentro
+    largo   = int(lado["largo"] * 0.6)  # ← largo a lo largo del borde
     cy      = lado["centro_y"]
     cx      = lado["centro_x"]
-    largo   = int(lado["largo"] * largo_fraccion)
     H, W    = img.shape
 
     if tipo == "H":
+        # Rectángulo ANCHO (largo horizontal) y DELGADO (poco alto)
         if nombre_lado == "top":
-            # Interior está ABAJO — empezar desde el borde + margen
             r0 = max(0, cy + margen)
-            r1 = min(H, cy + margen + ancho)
-        else:  # bottom
-            # Interior está ARRIBA — terminar en el borde - margen
-            r0 = max(0, cy - margen - ancho)
+            r1 = min(H, cy + margen + delgado)
+        else:
+            r0 = max(0, cy - margen - delgado)
             r1 = min(H, cy - margen)
         c0 = max(0, cx - largo // 2)
         c1 = min(W, cx + largo // 2)
     else:
+        # Rectángulo ALTO (largo vertical) y DELGADO (poco ancho)
         if nombre_lado == "left":
-            # Interior está a la DERECHA — empezar desde el borde + margen
             c0 = max(0, cx + margen)
-            c1 = min(W, cx + margen + ancho)
-        else:  # right
-            # Interior está a la IZQUIERDA — terminar en borde - margen
-            c0 = max(0, cx - margen - ancho)
+            c1 = min(W, cx + margen + delgado)
+        else:
+            c0 = max(0, cx - margen - delgado)
             c1 = min(W, cx - margen)
         r0 = max(0, cy - largo // 2)
         r1 = min(H, cy + largo // 2)
