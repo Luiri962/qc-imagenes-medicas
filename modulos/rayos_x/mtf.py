@@ -42,7 +42,8 @@ def segmentar_cuadrado(img):
         for k in range(1, n + 1):
             region = labeled == k
             area   = region.sum()
-            if area < 500:
+            area_maxima = img.shape[0] * img.shape[1] * 0.20
+            if area < 500 or area > area_maxima:
                 continue
             ys, xs = np.where(region)
             h = ys.max() - ys.min()
