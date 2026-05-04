@@ -321,3 +321,179 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         "lsf":     lsf,    "bin_mm":  px_mm,
         "nyquist": nyquist,
     }
+    # ── Figura completa ──────────────────────────────────────────────────────────
+def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
+    ys_m, xs_m = np.where(mask)
+    mg  = 150
+    rv0 = max(0, ys_m.min() - mg); rv1 = min(img.shape[0], ys_m.max() + mg)
+    cv0 = max(0, xs_m.min() - mg); cv1 = min(img.shape[1], xs_m.max() + mg)
+    zona = img[rv0:rv1, cv0:cv1]
+
+    r0H, r1H, c0H, c1H = rois["H"]
+    r0V, r1V, c0V, c1V = rois["V"]
+
+    fig = plt.figure(figsize=(20, 14), facecolor="#F4F6F8")
+    fig.suptitle(
+        f"MTF — Control de Calidad  |  {equipo}  |  "
+        f"Pixel spacing: {px_mm} mm  |  {fecha}",
+        fontsize=13, fontweight="bold", y=0.99,
+    )
+
+    # ── Imagen con ROIs ───────────────────────────────────────────────────────
+    ax1 = fig.add_axes([0.03, 0.54, 0.28, 0.40])
+    ax1.imshow(zona, cmap="gray", aspect="auto",
+               vmin=np.percentile(zona, 1), vmax=np.percentile(zona, 99))
+    for (r0, r1, c0, c1), color in [
+        ((r0H, r1H, c0H, c1H), "#E65100"),
+        ((r0V, r1V, c0V, c1V), "#1565C0"),
+    ]:
+        ax1.add_patch(patches.Rectangle(
+            (c0 - cv0, r0 - rv0), c1 - c0, r1 - r0,
+            lw=2.5, edgecolor=color, facecolor=color, alpha=0.15))
+        ax1.add_patch(patches.Rectangle(
+            (c0 - cv0, r0 - rv0), c1 - c0, r1 - r0,
+            lw=2.5, edgecolor=color, facecolor="none"))
+    ax1.text(c0H - cv0 + 6, r0H - rv0 - 10,
+             f"ROI H  ({res_H['angulo']:.1f}°)",
+             color="#FF6D00", fontsize=8, fontweight="bold")
+    ax1.text(c0V - cv0 + 6, r1V - rv0 + 14,
+             f"ROI V  ({res_V['angulo']:.1f}°)",
+             color="#1565C0", fontsize=8, fontweight="bold")
+    ax1.set_title("Objeto borde — ROIs detectados", fontsize=10, fontweight="bold")
+    ax1.axis("off")
+
+    # ── ESF Horizontal ────────────────────────────────────────────────────────
+    ax2 = fig.add_axes([0.36, 0.54, 0.18, 0.40])
+    ax2.plot(res_H["esf_x"], res_H["esf"], color="#BDBDBD", lw=1, alpha=0.5)
+    ax2.plot(res_H["esf_x"],
+             gaussian_filter(res_H["esf"].astype(float), sigma=0.8),
+             color="#E65100", lw=2)
+    ax2.axvline(0, color="gray", ls=":", lw=1)
+    ax2.set_title("ESF — Horizontal", fontsize=10, fontweight="bold")
+    ax2.set_xlabel("Posición relativa (mm)")
+    ax2.set_ylabel("ESF norm.")
+    ax2.grid(True, alpha=0.2)
+
+    # ── ESF Vertical ──────────────────────────────────────────────────────────
+    ax3 = fig.add_axes([0.58, 0.54, 0.18, 0.40])
+    ax3.plot(res_V["esf_x"], res_V["esf"], color="#BDBDBD", lw=1, alpha=0.5)
+    ax3.plot(res_V["esf_x"],
+             gaussian_filter(res_V["esf"].astype(float), sigma=0.8),
+             color="#1565C0", lw=2)
+    ax3.axvline(0, color="gray", ls=":", lw=1)
+    ax3.set_title("ESF — Vertical", fontsize=10, fontweight="bold")
+    ax3.set_xlabel("Posición relativa (mm)")
+    ax3.set_ylabel("ESF norm.")
+    ax3.grid(True, alpha=0.2)
+
+    # ── LSF ───────────────────────────────────────────────────────────────────
+    ax4 = fig.add_axes([0.80, 0.54, 0.17, 0.40])
+    lH = (np.arange(len(res_H["lsf"])) * res_H["bin_mm"]
+          - len(res_H["lsf"]) // 2 * res_H["bin_mm"])
+    lV = (np.arange(len(res_V["lsf"])) * res_V["bin_mm"]
+          - len(res_V["lsf"]) // 2 * res_V["bin_mm"])
+    ax4.plot(lH, res_H["lsf"], color="#E65100", lw=2,
+             label=f"H  {res_H['fwhm_mm']:.3f}mm" if res_H["fwhm_mm"] else "H")
+    ax4.plot(lV, res_V["lsf"], color="#1565C0", lw=2,
+             label=f"V  {res_V['fwhm_mm']:.3f}mm" if res_V["fwhm_mm"] else "V")
+    ax4.axhline(0.5, color="gray", ls=":", lw=1, alpha=0.5)
+    ax4.set_title("LSF", fontsize=10, fontweight="bold")
+    ax4.set_xlabel("Posición (mm)")
+    ax4.set_ylabel("Amplitud norm.")
+    ax4.legend(fontsize=8)
+    ax4.grid(True, alpha=0.2)
+
+    # ── MTF panels ────────────────────────────────────────────────────────────
+    def panel_mtf(ax, res, titulo, color):
+        ax.fill_between(res["freqs"], res["mtf"], alpha=0.08, color=color)
+        ax.plot(res["freqs"], res["mtf"], color=color, lw=2.8, label="MTF medida")
+        ax.axhline(0.50, color="#FF6F00", ls="--", lw=1.8, alpha=0.9, label="MTF = 50%")
+        ax.axhline(0.20, color="#6A1B9A", ls="--", lw=1.8, alpha=0.9, label="MTF = 20%")
+        ny = res["nyquist"]
+        ax.axvline(ny, color="#546E7A", ls=":", lw=1.5, label=f"Nyquist={ny:.2f}")
+        if res["mtf50"]:
+            ax.axvline(res["mtf50"], color="#FF6F00", lw=2.2, alpha=0.9)
+            ax.annotate(
+                f"MTF50 = {res['mtf50']:.3f} lp/mm",
+                xy=(res["mtf50"], 0.50),
+                xytext=(res["mtf50"] + ny * 0.07, 0.63),
+                fontsize=10, fontweight="bold", color="#BF360C",
+                arrowprops=dict(arrowstyle="->", color="#FF6F00", lw=2),
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="#FFF8E1",
+                          alpha=0.97, edgecolor="#FF6F00"),
+            )
+        if res["mtf20"]:
+            ax.axvline(res["mtf20"], color="#6A1B9A", lw=2.2, alpha=0.9)
+            ax.annotate(
+                f"MTF20 = {res['mtf20']:.3f} lp/mm",
+                xy=(res["mtf20"], 0.20),
+                xytext=(res["mtf20"] + ny * 0.07, 0.33),
+                fontsize=10, fontweight="bold", color="#4A148C",
+                arrowprops=dict(arrowstyle="->", color="#6A1B9A", lw=2),
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="#F3E5F5",
+                          alpha=0.97, edgecolor="#6A1B9A"),
+            )
+        ax.set_xlim([0, ny * 1.05])
+        ax.set_ylim([0, 1.08])
+        ax.set_title(titulo, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Frecuencia espacial (lp/mm)", fontsize=11)
+        ax.set_ylabel("MTF", fontsize=11)
+        ax.legend(fontsize=9, loc="upper right")
+        ax.grid(True, alpha=0.2)
+
+    ax5 = fig.add_axes([0.06, 0.06, 0.40, 0.42])
+    panel_mtf(ax5, res_H, "MTF — Dirección Horizontal", "#BF360C")
+
+    ax6 = fig.add_axes([0.55, 0.06, 0.40, 0.42])
+    panel_mtf(ax6, res_V, "MTF — Dirección Vertical", "#0D47A1")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    return fig
+
+
+# ── Función principal ─────────────────────────────────────────────────────────
+def run(img, ds):
+    px_mm     = float(getattr(ds, "PixelSpacing", [0.15, 0.15])[0])
+    equipo    = getattr(ds, "ManufacturerModelName", "N/D")
+    fecha_raw = getattr(ds, "StudyDate", "")
+    try:
+        fecha = f"{fecha_raw[6:8]}/{fecha_raw[4:6]}/{fecha_raw[0:4]}"
+    except Exception:
+        fecha = fecha_raw
+
+    mask  = segmentar_cuadrado(img)
+    lados = extraer_lados(mask)
+
+    cands_H = {k: lados[k] for k in ("top", "bottom") if k in lados}
+    cands_V = {k: lados[k] for k in ("left", "right")  if k in lados}
+    if not cands_H or not cands_V:
+        raise RuntimeError("No se detectaron los bordes H o V del cuadrado.")
+
+    lado_H = max(cands_H.values(), key=lambda x: x["largo"])
+    lado_V = max(cands_V.values(), key=lambda x: x["largo"])
+
+    r0H, r1H, c0H, c1H = roi_sobre_borde(img, lado_H, "H")
+    r0V, r1V, c0V, c1V = roi_sobre_borde(img, lado_V, "V")
+    rois = {"H": (r0H, r1H, c0H, c1H), "V": (r0V, r1V, c0V, c1V)}
+
+    res_H = calcular_mtf(img[r0H:r1H, c0H:c1H], px_mm, "H")
+    res_V = calcular_mtf(img[r0V:r1V, c0V:c1V], px_mm, "V")
+
+    fig = figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm)
+
+    return {
+        "figura":   fig,
+        "mtf50_h":  res_H["mtf50"],
+        "mtf20_h":  res_H["mtf20"],
+        "mtf50_v":  res_V["mtf50"],
+        "mtf20_v":  res_V["mtf20"],
+        "angulo_h": res_H["angulo"],
+        "angulo_v": res_V["angulo"],
+        "fwhm_h":   res_H["fwhm_mm"],
+        "fwhm_v":   res_V["fwhm_mm"],
+        "nyquist":  res_H["nyquist"],
+        "px_mm":    px_mm,
+        "equipo":   equipo,
+        "fecha":    fecha,
+    }
+
