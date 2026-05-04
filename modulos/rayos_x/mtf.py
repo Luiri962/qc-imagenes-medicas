@@ -180,7 +180,7 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
     """
 
     # Después (correcto)
-    profundo = int(lado["largo"] * 0.5)          # 10 mm hacia adentro
+    profundo = int(lado["largo"] * 0.1)          # 10 mm hacia adentro
     margen   = int(-5.0  / px_mm)          # 3 mm de separación desde el borde
     ancho    = int(7.0 / px_mm)  # 35% del largo del borde
     cy       = lado["centro_y"]
