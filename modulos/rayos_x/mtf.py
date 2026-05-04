@@ -18,52 +18,137 @@ from scipy.fft import fft, fftfreq
 OVERSAMPLE      = 4
 VENTANA_BORDE   = 30
 SIGMA_SUAVIZADO = 0.8
-CONTRASTE_MIN   = 100
+CONTRASTE_MIN   = 80
 ANCHO_ROI       = 60
 
 
 # ── Segmentación del cuadrado ────────────────────────────────────────────────
 def segmentar_cuadrado(img):
-    fondo = uniform_filter(img.astype(float), size=int(img.shape[0] * 0.15))
-    diff  = img.astype(float) - fondo
+    """
+    Estrategia robusta de dos pasos:
+    1. Detectar el campo de radiación (zona brillante del detector)
+    2. Dentro del campo, encontrar el cuadrado metálico:
+       - Si el cuadrado es MÁS OSCURO que el campo (atenúa): buscar región oscura
+       - Si el cuadrado es MÁS BRILLANTE que el fondo: buscar región brillante
+    """
 
-    for signo, pct in [(1, 97), (1, 95), (-1, 97), (-1, 95)]:
-        campo    = signo * diff
-        mask_raw = campo > np.percentile(campo, pct)
-        mask_f   = binary_fill_holes(mask_raw)
-        mask_f   = binary_erosion(mask_f,  iterations=5)
-        mask_f   = binary_dilation(mask_f, iterations=5)
+    # ── Paso 1: detectar el campo de radiación ────────────────────────────────
+    # El campo es la región brillante — umbral al percentil 35 global
+    umbral_campo = np.percentile(img, 35)
+    mask_campo   = img > umbral_campo
+    mask_campo   = binary_fill_holes(mask_campo)
+    mask_campo   = binary_erosion(mask_campo, iterations=10)
 
-        labeled, n = label(mask_f)
-        if n == 0:
-            continue
+    fraccion_campo = mask_campo.sum() / img.size
+    tiene_campo    = fraccion_campo > 0.05  # al menos 5% de la imagen
+    print(f"  Campo detectado: {fraccion_campo*100:.1f}% de la imagen")
 
-        # area_maxima FUERA del loop
-        area_maxima = img.shape[0] * img.shape[1] * 0.20
+    # ── Paso 2: buscar el cuadrado ─────────────────────────────────────────────
+    # Intentar las 4 estrategias en orden:
+    # A) Cuadrado oscuro DENTRO del campo (caso más común en QC)
+    # B) Cuadrado brillante respecto al fondo local (caso imagen sin campo claro)
+    # C) Región compacta con mayor gradiente en los bordes
+    # D) Fallback: diferencia respecto al fondo global
 
-        mejor, mejor_score = None, 0
-        for k in range(1, n + 1):
-            region = labeled == k
-            area   = region.sum()
-            if area < 500 or area > area_maxima:
+    resultado = None
+
+    # ── Estrategia A: región oscura dentro del campo ──────────────────────────
+    if tiene_campo:
+        fondo_local = uniform_filter(img.astype(float),
+                                     size=int(img.shape[0] * 0.05))
+        diff_oscuro = fondo_local - img.astype(float)  # positivo = más oscuro
+        diff_oscuro[~mask_campo] = 0
+
+        if diff_oscuro[mask_campo].max() > 100:
+            for pct in [95, 90, 85]:
+                umbral = np.percentile(diff_oscuro[mask_campo], pct)
+                mask_raw = (diff_oscuro > umbral) & mask_campo
+                mask_raw = binary_fill_holes(mask_raw)
+                mask_raw = binary_erosion(mask_raw, iterations=3)
+                mask_raw = binary_dilation(mask_raw, iterations=5)
+
+                labeled, n = label(mask_raw)
+                if n == 0:
+                    continue
+
+                area_img     = img.shape[0] * img.shape[1]
+                area_minima  = area_img * 0.001   # mínimo 0.1% de la imagen
+                area_maxima  = area_img * 0.15    # máximo 15% de la imagen
+
+                mejor, mejor_score = None, 0
+                for k in range(1, n + 1):
+                    region = labeled == k
+                    area   = region.sum()
+                    if area < area_minima or area > area_maxima:
+                        continue
+                    ys, xs = np.where(region)
+                    h = ys.max() - ys.min()
+                    w = xs.max() - xs.min()
+                    if h == 0 or w == 0:
+                        continue
+                    aspecto = min(h, w) / max(h, w)
+                    relleno = area / (h * w)
+                    score   = aspecto * relleno * np.sqrt(area)
+                    if score > mejor_score:
+                        mejor_score = score
+                        mejor       = region
+
+                if mejor is not None:
+                    print(f"  ✅ Estrategia A (oscuro en campo, pct={pct}): score={mejor_score:.0f}")
+                    resultado = binary_dilation(mejor, iterations=8)
+                    break
+
+    # ── Estrategia B: región brillante respecto al fondo local ────────────────
+    if resultado is None:
+        fondo_grande = uniform_filter(img.astype(float),
+                                      size=int(img.shape[0] * 0.15))
+        diff_brillante = img.astype(float) - fondo_grande
+
+        for pct in [97, 95, 93]:
+            umbral   = np.percentile(diff_brillante, pct)
+            mask_raw = diff_brillante > umbral
+            mask_raw = binary_fill_holes(mask_raw)
+            mask_raw = binary_erosion(mask_raw, iterations=5)
+            mask_raw = binary_dilation(mask_raw, iterations=5)
+
+            labeled, n = label(mask_raw)
+            if n == 0:
                 continue
-            ys, xs = np.where(region)
-            h = ys.max() - ys.min()
-            w = xs.max() - xs.min()
-            if h == 0 or w == 0:
-                continue
-            score = (min(h, w) / max(h, w)) * (area / (h * w)) * np.sqrt(area)
-            if score > mejor_score:
-                mejor_score = score
-                mejor       = region
 
-        if mejor is not None:
-            return binary_dilation(mejor, iterations=10)
+            area_img    = img.shape[0] * img.shape[1]
+            area_minima = area_img * 0.001
+            area_maxima = area_img * 0.20
 
-    raise RuntimeError(
-        "No se encontró el cuadrado metálico. "
-        "Verifica que la imagen contenga el fantoma."
-    )
+            mejor, mejor_score = None, 0
+            for k in range(1, n + 1):
+                region = labeled == k
+                area   = region.sum()
+                if area < area_minima or area > area_maxima:
+                    continue
+                ys, xs = np.where(region)
+                h = ys.max() - ys.min()
+                w = xs.max() - xs.min()
+                if h == 0 or w == 0:
+                    continue
+                aspecto = min(h, w) / max(h, w)
+                relleno = area / (h * w)
+                score   = aspecto * relleno * np.sqrt(area)
+                if score > mejor_score:
+                    mejor_score = score
+                    mejor       = region
+
+            if mejor is not None:
+                print(f"  ✅ Estrategia B (brillante local, pct={pct}): score={mejor_score:.0f}")
+                resultado = binary_dilation(mejor, iterations=8)
+                break
+
+    if resultado is None:
+        raise RuntimeError(
+            "No se encontró el cuadrado metálico en la imagen. "
+            "Verifica que el fantoma esté visible y dentro del campo de radiación."
+        )
+
+    return resultado
 
 
 # ── Extracción de lados ──────────────────────────────────────────────────────
@@ -262,7 +347,7 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
     # ── Imagen con ROIs ───────────────────────────────────────────────────────
     ax1 = fig.add_axes([0.03, 0.54, 0.28, 0.40])
     ax1.imshow(zona, cmap="gray", aspect="auto",
-               vmin=np.percentile(zona, 20), vmax=np.percentile(zona, 80))
+               vmin=np.percentile(zona, 1), vmax=np.percentile(zona, 99))
     for (r0, r1, c0, c1), color in [
         ((r0H, r1H, c0H, c1H), "#E65100"),
         ((r0V, r1V, c0V, c1V), "#1565C0"),
@@ -371,12 +456,8 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
     return fig
 
 
-# ── Función principal que llama la app ───────────────────────────────────────
+# ── Función principal ─────────────────────────────────────────────────────────
 def run(img, ds):
-    """
-    Recibe la imagen numpy y el dataset DICOM.
-    Devuelve un dict con figura y métricas.
-    """
     px_mm     = float(getattr(ds, "PixelSpacing", [0.15, 0.15])[0])
     equipo    = getattr(ds, "ManufacturerModelName", "N/D")
     fecha_raw = getattr(ds, "StudyDate", "")
