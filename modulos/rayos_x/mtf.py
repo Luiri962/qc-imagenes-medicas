@@ -199,8 +199,7 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
 
     return r0, r1, c0, c1
 
-
-# ── Cálculo MTF ──────────────────────────────────────────────────────────────
+# ── Calcular MTF ─────────────────────────────
 def calcular_mtf(roi, px_mm, orientacion="H"):
     from scipy.optimize import curve_fit
     from scipy.special import erf as sci_erf
@@ -214,6 +213,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         n  = roi.shape[0]
         pf = lambda k: roi[k, :].astype(float)
 
+    # ── 1. Posición sub-pixel del borde en cada perfil ────────────────────────
     posiciones, idx_ok = [], []
     for k in range(n):
         p = pf(k)
@@ -243,6 +243,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
     )
 
+    # ── 2. ESF alineada — centrar cada perfil en su posición de borde ─────────
     longitud = roi.shape[0] if orientacion == "H" else roi.shape[1]
     esf_sum  = np.zeros(longitud)
     cuenta   = np.zeros(longitud)
@@ -263,15 +264,24 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
     x_px = np.arange(len(esf), dtype=float) - centro
     x_mm = x_px * px_mm
 
+    # ── 3. Recortar ESF ±32 px alrededor del borde y ajustar erf ─────────────
+    centro_borde = np.argmax(np.abs(np.diff(esf)))
+    ventana      = 32
+    idx0 = max(0, centro_borde - ventana)
+    idx1 = min(len(esf), centro_borde + ventana)
+    esf_crop  = esf[idx0:idx1]
+    x_mm_crop = x_mm[idx0:idx1]
+
     def esf_func(x, a, b, c, sigma):
         return a + b * sci_erf((x - c) / (np.sqrt(2) * abs(sigma)))
 
     try:
+        pos_borde_mm = x_mm[centro_borde]
         popt, _ = curve_fit(
-            esf_func, x_mm, esf,
-            p0=[0.0, 0.5, 0.0, px_mm * 2],
-            bounds=([-0.1,  0.1, x_mm.min(), px_mm * 0.1],
-                    [ 0.5,  1.0, x_mm.max(), px_mm * 20]),
+            esf_func, x_mm_crop, esf_crop,
+            p0=[0.0, 0.5, pos_borde_mm, px_mm * 2],
+            bounds=([-0.1,  0.1, x_mm_crop.min(), px_mm * 0.1],
+                    [ 0.5,  1.0, x_mm_crop.max(), px_mm * 20]),
             maxfev=10000
         )
         sigma_mm = abs(popt[3])
@@ -297,6 +307,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         freqs   = freqs_r[m]; mtf = mtf_r[m]
         fwhm_mm = None
 
+    # ── 4. MTF50 y MTF20 ──────────────────────────────────────────────────────
     def fu(f, m, u):
         idx = np.where(m <= u)[0]
         if not len(idx): return None
