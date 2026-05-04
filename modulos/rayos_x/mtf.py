@@ -178,9 +178,11 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
     profundo : cuánto entra hacia adentro (perpendicular al borde)
     ancho    : qué tan largo es a lo largo del borde
     """
-    profundo = int(3.0  / px_mm)          # 10 mm hacia adentro
-    margen   = int(10.0 / px_mm)          # 3 mm de separación desde el borde
-    ancho    = int(lado["largo"] * 0.35)  # 35% del largo del borde
+
+    # Después (correcto)
+    profundo = int(15.0 / px_mm)   # 15 mm hacia adentro del cuadrado
+    margen   = int(3.0  / px_mm)   # 3 mm de separación desde el borde
+    ancho = int(lado["largo"] * 0.6)   # 60% del largo del borde
     cy       = lado["centro_y"]
     cx       = lado["centro_x"]
     H, W     = img.shape
