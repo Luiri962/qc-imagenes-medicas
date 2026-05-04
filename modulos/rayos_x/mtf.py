@@ -18,7 +18,7 @@ from scipy.fft import fft, fftfreq
 OVERSAMPLE      = 4
 VENTANA_BORDE   = 30
 SIGMA_SUAVIZADO = 0.8
-CONTRASTE_MIN   = 80
+CONTRASTE_MIN   = 100
 ANCHO_ROI       = 60
 
 
