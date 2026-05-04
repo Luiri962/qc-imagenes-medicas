@@ -33,7 +33,6 @@ def segmentar_cuadrado(img):
 
     resultado = None
 
-    # Estrategia A: región oscura dentro del campo
     if tiene_campo:
         fondo_local = uniform_filter(img.astype(float),
                                      size=int(img.shape[0] * 0.05))
@@ -77,7 +76,6 @@ def segmentar_cuadrado(img):
                     resultado = binary_dilation(mejor, iterations=8)
                     break
 
-    # Estrategia B: región brillante respecto al fondo local
     if resultado is None:
         fondo_grande   = uniform_filter(img.astype(float),
                                         size=int(img.shape[0] * 0.15))
@@ -173,52 +171,42 @@ def extraer_lados(mask):
 
 # ── Construir ROI hacia el interior del cuadrado ─────────────────────────────
 def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
-    """
-    ROI delgado a lo largo del borde y profundo hacia el interior.
-    profundo : cuánto entra hacia adentro (perpendicular al borde)
-    ancho    : qué tan largo es a lo largo del borde
-    """
-
-    # Después (correcto)
-    profundo = int(lado["largo"] * 0.15)          # 10 mm hacia adentro
-    margen   = int(-4.0  / px_mm)          # 3 mm de separación desde el borde
-    ancho    = int(10.0 / px_mm)  # 35% del largo del borde
+    profundo = int(lado["largo"] * 0.15)
+    margen   = int(-4.0 / px_mm)
+    ancho    = int(10.0 / px_mm)
     cy       = lado["centro_y"]
     cx       = lado["centro_x"]
     H, W     = img.shape
 
     if tipo == "H":
-        # Estrecho a lo largo del borde (ancho), profundo hacia adentro
         c0 = max(0, cx - ancho // 2)
         c1 = min(W, cx + ancho // 2)
         if nombre_lado == "top":
             r0 = max(0, cy + margen)
             r1 = min(H, cy + margen + profundo)
-        else:  # bottom
+        else:
             r0 = max(0, cy - margen - profundo)
             r1 = min(H, cy - margen)
-
     else:
-        # Estrecho a lo largo del borde (ancho), profundo hacia adentro
         r0 = max(0, cy - ancho // 2)
         r1 = min(H, cy + ancho // 2)
         if nombre_lado == "left":
             c0 = max(0, cx + margen)
             c1 = min(W, cx + margen + profundo)
-        else:  # right
+        else:
             c0 = max(0, cx - margen - profundo)
             c1 = min(W, cx - margen)
 
     return r0, r1, c0, c1
 
 
-pythondef calcular_mtf(roi, px_mm, orientacion="H"):
+# ── Cálculo MTF ──────────────────────────────────────────────────────────────
+def calcular_mtf(roi, px_mm, orientacion="H"):
     from scipy.optimize import curve_fit
     from scipy.special import erf as sci_erf
 
     nyquist = 1 / (2 * px_mm)
 
-    # ── 1. Posición sub-pixel del borde en cada perfil ────────────────────────
     if orientacion == "H":
         n  = roi.shape[1]
         pf = lambda k: roi[:, k].astype(float)
@@ -255,7 +243,6 @@ pythondef calcular_mtf(roi, px_mm, orientacion="H"):
         np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
     )
 
-    # ── 2. ESF alineada — centrar cada perfil en su posición de borde ─────────
     longitud = roi.shape[0] if orientacion == "H" else roi.shape[1]
     esf_sum  = np.zeros(longitud)
     cuenta   = np.zeros(longitud)
@@ -276,7 +263,6 @@ pythondef calcular_mtf(roi, px_mm, orientacion="H"):
     x_px = np.arange(len(esf), dtype=float) - centro
     x_mm = x_px * px_mm
 
-    # ── 3. Ajustar función erf a la ESF ───────────────────────────────────────
     def esf_func(x, a, b, c, sigma):
         return a + b * sci_erf((x - c) / (np.sqrt(2) * abs(sigma)))
 
@@ -289,38 +275,28 @@ pythondef calcular_mtf(roi, px_mm, orientacion="H"):
             maxfev=10000
         )
         sigma_mm = abs(popt[3])
-        esf_fit  = esf_func(x_mm, *popt)
         fwhm_mm  = 2.355 * sigma_mm
-
-        # ── 4. MTF analítica (idéntica a ImageJ) ─────────────────────────────
-        # MTF(f) = exp(-2π²σ²f²)
-        freqs = np.linspace(0, nyquist * 1.05, 2000)
-        mtf   = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
-
-        # LSF para graficar
-        lsf = np.exp(-x_mm**2 / (2 * sigma_mm**2))
-        lsf /= lsf.max()
-
+        freqs    = np.linspace(0, nyquist * 1.05, 2000)
+        mtf      = np.exp(-2 * (np.pi * sigma_mm * freqs)**2)
+        lsf      = np.exp(-x_mm**2 / (2 * sigma_mm**2))
+        lsf     /= lsf.max()
         print(f"  Ajuste erf OK | sigma={sigma_mm:.4f} mm | "
               f"FWHM={fwhm_mm:.4f} mm | MTF50={0.4413/fwhm_mm:.3f} lp/mm")
 
     except Exception as e:
         print(f"  Ajuste erf falló: {e} — usando derivada numérica")
-        esf_fit = gaussian_filter(esf.astype(float), sigma=1.5)
-        lsf_raw = np.diff(esf_fit)
-        if abs(lsf_raw.min()) > abs(lsf_raw.max()): lsf_raw = -lsf_raw
-        lsf_raw -= lsf_raw.min(); lsf_raw /= (lsf_raw.max() + 1e-10)
-        lsf   = lsf_raw
+        esf_s = gaussian_filter(esf.astype(float), sigma=1.5)
+        lsf   = np.diff(esf_s)
+        if abs(lsf.min()) > abs(lsf.max()): lsf = -lsf
+        lsf  -= lsf.min(); lsf /= (lsf.max() + 1e-10)
         N     = len(lsf); pad = 16
         mtf_r = np.abs(fft(lsf * np.hanning(N), n=N*pad))[:N*pad//2]
         mtf_r /= mtf_r[0]
         freqs_r = fftfreq(N*pad, d=px_mm)[:N*pad//2]
         m       = (freqs_r >= 0) & (freqs_r <= nyquist * 1.05)
-        freqs   = freqs_r[m]
-        mtf     = mtf_r[m]
+        freqs   = freqs_r[m]; mtf = mtf_r[m]
         fwhm_mm = None
 
-    # ── 5. MTF50 y MTF20 ──────────────────────────────────────────────────────
     def fu(f, m, u):
         idx = np.where(m <= u)[0]
         if not len(idx): return None
@@ -358,7 +334,6 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
         fontsize=13, fontweight="bold", y=0.99,
     )
 
-    # ── Imagen con ROIs ───────────────────────────────────────────────────────
     ax1 = fig.add_axes([0.03, 0.54, 0.28, 0.40])
     ax1.imshow(zona, cmap="gray", aspect="auto",
                vmin=np.percentile(zona, 1), vmax=np.percentile(zona, 99))
@@ -367,21 +342,20 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
         ((r0V, r1V, c0V, c1V), "#1565C0"),
     ]:
         ax1.add_patch(patches.Rectangle(
-            (c0 - cv0, r0 - rv0), c1 - c0, r1 - r0,
+            (c0-cv0, r0-rv0), c1-c0, r1-r0,
             lw=2.5, edgecolor=color, facecolor=color, alpha=0.15))
         ax1.add_patch(patches.Rectangle(
-            (c0 - cv0, r0 - rv0), c1 - c0, r1 - r0,
+            (c0-cv0, r0-rv0), c1-c0, r1-r0,
             lw=2.5, edgecolor=color, facecolor="none"))
-    ax1.text(c0H - cv0 + 6, r0H - rv0 - 10,
+    ax1.text(c0H-cv0+6, r0H-rv0-10,
              f"ROI H  ({res_H['angulo']:.1f}°)",
              color="#FF6D00", fontsize=8, fontweight="bold")
-    ax1.text(c0V - cv0 + 6, r1V - rv0 + 14,
+    ax1.text(c0V-cv0+6, r1V-rv0+14,
              f"ROI V  ({res_V['angulo']:.1f}°)",
              color="#1565C0", fontsize=8, fontweight="bold")
     ax1.set_title("Objeto borde — ROIs detectados", fontsize=10, fontweight="bold")
     ax1.axis("off")
 
-    # ── ESF Horizontal ────────────────────────────────────────────────────────
     ax2 = fig.add_axes([0.36, 0.54, 0.18, 0.40])
     ax2.plot(res_H["esf_x"], res_H["esf"], color="#BDBDBD", lw=1, alpha=0.5)
     ax2.plot(res_H["esf_x"],
@@ -389,11 +363,9 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
              color="#E65100", lw=2)
     ax2.axvline(0, color="gray", ls=":", lw=1)
     ax2.set_title("ESF — Horizontal", fontsize=10, fontweight="bold")
-    ax2.set_xlabel("Posición relativa (mm)")
-    ax2.set_ylabel("ESF norm.")
+    ax2.set_xlabel("Posición relativa (mm)"); ax2.set_ylabel("ESF norm.")
     ax2.grid(True, alpha=0.2)
 
-    # ── ESF Vertical ──────────────────────────────────────────────────────────
     ax3 = fig.add_axes([0.58, 0.54, 0.18, 0.40])
     ax3.plot(res_V["esf_x"], res_V["esf"], color="#BDBDBD", lw=1, alpha=0.5)
     ax3.plot(res_V["esf_x"],
@@ -401,11 +373,9 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
              color="#1565C0", lw=2)
     ax3.axvline(0, color="gray", ls=":", lw=1)
     ax3.set_title("ESF — Vertical", fontsize=10, fontweight="bold")
-    ax3.set_xlabel("Posición relativa (mm)")
-    ax3.set_ylabel("ESF norm.")
+    ax3.set_xlabel("Posición relativa (mm)"); ax3.set_ylabel("ESF norm.")
     ax3.grid(True, alpha=0.2)
 
-    # ── LSF ───────────────────────────────────────────────────────────────────
     ax4 = fig.add_axes([0.80, 0.54, 0.17, 0.40])
     lH = (np.arange(len(res_H["lsf"])) * res_H["bin_mm"]
           - len(res_H["lsf"]) // 2 * res_H["bin_mm"])
@@ -417,12 +387,9 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
              label=f"V  {res_V['fwhm_mm']:.3f}mm" if res_V["fwhm_mm"] else "V")
     ax4.axhline(0.5, color="gray", ls=":", lw=1, alpha=0.5)
     ax4.set_title("LSF", fontsize=10, fontweight="bold")
-    ax4.set_xlabel("Posición (mm)")
-    ax4.set_ylabel("Amplitud norm.")
-    ax4.legend(fontsize=8)
-    ax4.grid(True, alpha=0.2)
+    ax4.set_xlabel("Posición (mm)"); ax4.set_ylabel("Amplitud norm.")
+    ax4.legend(fontsize=8); ax4.grid(True, alpha=0.2)
 
-    # ── MTF panels ────────────────────────────────────────────────────────────
     def panel_mtf(ax, res, titulo, color):
         ax.fill_between(res["freqs"], res["mtf"], alpha=0.08, color=color)
         ax.plot(res["freqs"], res["mtf"], color=color, lw=2.8, label="MTF medida")
@@ -435,7 +402,7 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
             ax.annotate(
                 f"MTF50 = {res['mtf50']:.3f} lp/mm",
                 xy=(res["mtf50"], 0.50),
-                xytext=(res["mtf50"] + ny * 0.07, 0.63),
+                xytext=(res["mtf50"] + ny*0.07, 0.63),
                 fontsize=10, fontweight="bold", color="#BF360C",
                 arrowprops=dict(arrowstyle="->", color="#FF6F00", lw=2),
                 bbox=dict(boxstyle="round,pad=0.4", facecolor="#FFF8E1",
@@ -446,19 +413,17 @@ def figura_completa(img, mask, rois, res_H, res_V, equipo, fecha, px_mm):
             ax.annotate(
                 f"MTF20 = {res['mtf20']:.3f} lp/mm",
                 xy=(res["mtf20"], 0.20),
-                xytext=(res["mtf20"] + ny * 0.07, 0.33),
+                xytext=(res["mtf20"] + ny*0.07, 0.33),
                 fontsize=10, fontweight="bold", color="#4A148C",
                 arrowprops=dict(arrowstyle="->", color="#6A1B9A", lw=2),
                 bbox=dict(boxstyle="round,pad=0.4", facecolor="#F3E5F5",
                           alpha=0.97, edgecolor="#6A1B9A"),
             )
-        ax.set_xlim([0, ny * 1.05])
-        ax.set_ylim([0, 1.08])
+        ax.set_xlim([0, ny*1.05]); ax.set_ylim([0, 1.08])
         ax.set_title(titulo, fontsize=12, fontweight="bold")
         ax.set_xlabel("Frecuencia espacial (lp/mm)", fontsize=11)
         ax.set_ylabel("MTF", fontsize=11)
-        ax.legend(fontsize=9, loc="upper right")
-        ax.grid(True, alpha=0.2)
+        ax.legend(fontsize=9, loc="upper right"); ax.grid(True, alpha=0.2)
 
     ax5 = fig.add_axes([0.06, 0.06, 0.40, 0.42])
     panel_mtf(ax5, res_H, "MTF — Dirección Horizontal", "#BF360C")
@@ -483,7 +448,6 @@ def run(img, ds):
     mask  = segmentar_cuadrado(img)
     lados = extraer_lados(mask)
 
-    # Centro del cuadrado
     ys_m, xs_m = np.where(mask)
     cy_cuad = int(np.median(ys_m))
     cx_cuad = int(np.median(xs_m))
@@ -493,7 +457,6 @@ def run(img, ds):
     if not cands_H or not cands_V:
         raise RuntimeError("No se detectaron los bordes H o V del cuadrado.")
 
-    # Elegir el mejor lado
     nombre_H = "top"  if "top"  in cands_H else max(cands_H, key=lambda k: cands_H[k]["largo"])
     nombre_V = "left" if "left" in cands_V else max(cands_V, key=lambda k: cands_V[k]["largo"])
     lado_H   = cands_H[nombre_H]
@@ -519,5 +482,3 @@ def run(img, ds):
         "nyquist":  res_H["nyquist"],"px_mm":    px_mm,
         "equipo":   equipo,          "fecha":    fecha,
     }
-
-
