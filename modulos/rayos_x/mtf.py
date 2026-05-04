@@ -465,20 +465,27 @@ def run(img, ds):
     mask  = segmentar_cuadrado(img)
     lados = extraer_lados(mask)
 
+    # Centro del cuadrado
+    ys_m, xs_m = np.where(mask)
+    cy_cuad = int(np.median(ys_m))
+    cx_cuad = int(np.median(xs_m))
+
     cands_H = {k: lados[k] for k in ("top", "bottom") if k in lados}
     cands_V = {k: lados[k] for k in ("left", "right")  if k in lados}
     if not cands_H or not cands_V:
         raise RuntimeError("No se detectaron los bordes H o V del cuadrado.")
 
-    lado_H = max(cands_H.values(), key=lambda x: x["largo"])
-    lado_V = max(cands_V.values(), key=lambda x: x["largo"])
+    # Elegir el mejor lado
+    nombre_H = "top"  if "top"  in cands_H else max(cands_H, key=lambda k: cands_H[k]["largo"])
+    nombre_V = "left" if "left" in cands_V else max(cands_V, key=lambda k: cands_V[k]["largo"])
+    lado_H   = cands_H[nombre_H]
+    lado_V   = cands_V[nombre_V]
 
     r0H, r1H, c0H, c1H = roi_sobre_borde(
-    img, lado_H, "H", nombre_H, cy_cuad, cx_cuad, px_mm=px_mm)
+        img, lado_H, "H", nombre_H, cy_cuad, cx_cuad, px_mm=px_mm)
     r0V, r1V, c0V, c1V = roi_sobre_borde(
-    img, lado_V, "V", nombre_V, cy_cuad, cx_cuad, px_mm=px_mm)
+        img, lado_V, "V", nombre_V, cy_cuad, cx_cuad, px_mm=px_mm)
     rois = {"H": (r0H, r1H, c0H, c1H), "V": (r0V, r1V, c0V, c1V)}
-    
 
     res_H = calcular_mtf(img[r0H:r1H, c0H:c1H], px_mm, "H")
     res_V = calcular_mtf(img[r0V:r1V, c0V:c1V], px_mm, "V")
@@ -487,18 +494,12 @@ def run(img, ds):
 
     return {
         "figura":   fig,
-        "mtf50_h":  res_H["mtf50"],
-        "mtf20_h":  res_H["mtf20"],
-        "mtf50_v":  res_V["mtf50"],
-        "mtf20_v":  res_V["mtf20"],
-        "angulo_h": res_H["angulo"],
-        "angulo_v": res_V["angulo"],
-        "fwhm_h":   res_H["fwhm_mm"],
-        "fwhm_v":   res_V["fwhm_mm"],
-        "nyquist":  res_H["nyquist"],
-        "px_mm":    px_mm,
-        "equipo":   equipo,
-        "fecha":    fecha,
+        "mtf50_h":  res_H["mtf50"],  "mtf20_h":  res_H["mtf20"],
+        "mtf50_v":  res_V["mtf50"],  "mtf20_v":  res_V["mtf20"],
+        "angulo_h": res_H["angulo"], "angulo_v": res_V["angulo"],
+        "fwhm_h":   res_H["fwhm_mm"],"fwhm_v":   res_V["fwhm_mm"],
+        "nyquist":  res_H["nyquist"],"px_mm":    px_mm,
+        "equipo":   equipo,          "fecha":    fecha,
     }
 
 
