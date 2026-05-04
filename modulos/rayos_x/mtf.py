@@ -214,6 +214,9 @@ def roi_sobre_borde(img, lado, tipo, nombre_lado, cy_cuad, cx_cuad, px_mm=0.15):
 
 # ── Cálculo MTF ──────────────────────────────────────────────────────────────
 def calcular_mtf(roi, px_mm, orientacion="H"):
+    from scipy.optimize import curve_fit
+    from scipy.special import erf
+
     nyquist = 1 / (2 * px_mm)
 
     if orientacion == "H":
@@ -223,6 +226,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         n  = roi.shape[0]
         pf = lambda k: roi[k, :].astype(float)
 
+    # ── 1. Posición sub-pixel del borde en cada perfil ────────────────────────
     posiciones, idx_ok = [], []
     for k in range(n):
         p = pf(k)
@@ -252,6 +256,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
         np.arctan(np.polyfit(np.arange(len(posiciones)), posiciones, 1)[0])
     )
 
+    # ── 2. Construir ESF por superposición ────────────────────────────────────
     offsets_all, valores_all = [], []
     for i, k in enumerate(idx_ok):
         p    = pf(k).astype(float)
@@ -270,6 +275,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
     offsets_all = offsets_all[orden]
     valores_all = valores_all[orden]
 
+    # ── 3. Binning ────────────────────────────────────────────────────────────
     n_bins = int((offsets_all.max() - offsets_all.min()) / 1.0) + 1
     edges  = np.linspace(offsets_all.min(), offsets_all.max(), n_bins + 1)
     esf = np.zeros(n_bins); cnt = np.zeros(n_bins)
@@ -284,18 +290,40 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
     bin_mm = (1.0 / OVERSAMPLE) * px_mm
     esf_x  = bc / OVERSAMPLE * px_mm
 
-    esf_s = gaussian_filter(esf.astype(float), sigma=SIGMA_SUAVIZADO)
-    lsf   = np.diff(esf_s)
-    if abs(lsf.min()) > abs(lsf.max()):
-        lsf = -lsf
-    lsf -= lsf.min()
-    lsf /= (lsf.max() + 1e-10)
+    # ── 4. Ajustar función erf a la ESF (como ImageJ) ────────────────────────
+    def esf_erf(x, a, b, c, d):
+        return a + b * erf((x - c) / (np.sqrt(2) * abs(d)))
 
-    pi_ = np.argmax(lsf)
-    hl  = np.where((np.arange(len(lsf)) < pi_) & (lsf >= 0.5))[0]
-    hr  = np.where((np.arange(len(lsf)) > pi_) & (lsf >= 0.5))[0]
-    fwhm_mm = (hr[-1] - hl[0]) * bin_mm if (len(hl) and len(hr)) else None
+    try:
+        pos_borde = bc[np.argmax(np.abs(np.diff(esf)))]
+        popt, _   = curve_fit(
+            esf_erf, bc, esf,
+            p0=[0.5, 0.5, pos_borde, 2.0],
+            maxfev=5000
+        )
+        sigma_fit = abs(popt[3])
+        esf_fit   = esf_erf(bc, *popt)
 
+        # ── 5. LSF analítica = derivada de erf = Gaussiana ───────────────────
+        lsf_analitica = np.exp(-bc**2 / (2 * sigma_fit**2))
+        lsf_analitica /= lsf_analitica.max()
+        lsf = lsf_analitica
+
+        # FWHM analítico
+        fwhm_mm = 2.355 * sigma_fit * bin_mm
+
+    except Exception:
+        # Fallback: derivada numérica si el ajuste falla
+        esf_fit = gaussian_filter(esf.astype(float), sigma=SIGMA_SUAVIZADO)
+        lsf = np.diff(esf_fit)
+        if abs(lsf.min()) > abs(lsf.max()): lsf = -lsf
+        lsf -= lsf.min(); lsf /= (lsf.max() + 1e-10)
+        pi_  = np.argmax(lsf)
+        hl   = np.where((np.arange(len(lsf)) < pi_) & (lsf >= 0.5))[0]
+        hr   = np.where((np.arange(len(lsf)) > pi_) & (lsf >= 0.5))[0]
+        fwhm_mm = (hr[-1] - hl[0]) * bin_mm if (len(hl) and len(hr)) else None
+
+    # ── 6. FFT → MTF ──────────────────────────────────────────────────────────
     N   = len(lsf); pad = 16
     mtf_raw = np.abs(fft(lsf * np.hanning(N), n=N * pad))[:N * pad // 2]
     mtf_raw /= mtf_raw[0]
@@ -304,8 +332,7 @@ def calcular_mtf(roi, px_mm, orientacion="H"):
 
     def fu(f, m, u):
         idx = np.where(m <= u)[0]
-        if not len(idx):
-            return None
+        if not len(idx): return None
         i = idx[0]
         return float(
             f[i-1] + (f[i]-f[i-1]) * (u-m[i-1]) / (m[i]-m[i-1])
